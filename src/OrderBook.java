@@ -28,4 +28,30 @@ public class OrderBook {
 
 
     }
+
+
+    public static class Trade{
+
+        public final String buyOrderId;
+        public final String sellOrderId;
+
+        public final long price;
+        public final long quantity;
+        Trade(String buyOrderId, String sellOrderId, long price, long quantity){
+            this.buyOrderId = buyOrderId;
+            this.sellOrderId = sellOrderId;
+            this.price = price;
+            this.quantity = quantity;
+
+        }
+
+
+
+        @Override public String toString(){
+            return "Trade{"+ buyOrderId+ "/"+sellOrderId+"/"+" @"+price+"/"+" x"+quantity+"}";
+        }
+
+
+
+    }
 }
