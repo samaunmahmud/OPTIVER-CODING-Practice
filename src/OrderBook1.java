@@ -2,14 +2,20 @@ import java.util.*;
 
 public class OrderBook1 {
 
-    // 1. Core Data Models
+    // =========================================================================
+    // STAGE 1: DATA MODELS
+    // Objects representing an Order, Side, and completed Trade.
+    // =========================================================================
+
+    // Defines the directional intent of the trader: either buying or selling.
     public enum Side { BUY, SELL }
 
+    // Represents a single order submitted by a trader.
     public static class Order {
-        String id;
-        Side side;
-        long price;
-        long quantity;
+        String id;       // Unique identifier (e.g., "ord-101")
+        Side side;       // BUY or SELL
+        long price;      // Target price (e.g., 100)
+        long quantity;   // Number of units left to trade (mutates as trades execute)
 
         public Order(String id, Side side, long price, long quantity) {
             this.id = id;
@@ -19,40 +25,73 @@ public class OrderBook1 {
         }
     }
 
+    // An immutable record logging a successfully executed match between two orders.
     public record Trade(String buyOrderId, String sellOrderId, long price, long quantity) {}
 
-    // 2. State & Storage
-    // Bids: Sorted High -> Low | Asks: Sorted Low -> High
+
+    // =========================================================================
+    // STAGE 2: STORAGE & STATE MANAGEMENT
+    // How orders and trades are organized in memory for fast operations.
+    // =========================================================================
+
+    // BUY ORDERS (Bids): TreeMap sorted HIGH to LOW (Collections.reverseOrder()).
+    // Key = Price level | Value = List of orders waiting at that price in arrival order (FIFO).
     private final TreeMap<Long, List<Order>> bids = new TreeMap<>(Collections.reverseOrder());
+
+    // SELL ORDERS (Asks): TreeMap sorted LOW to HIGH (Default natural ordering).
+    // Key = Price level | Value = List of orders waiting at that price in arrival order (FIFO).
     private final TreeMap<Long, List<Order>> asks = new TreeMap<>();
+
+    // ID DIRECTORY: Maps Order ID -> Order Object.
+    // Allows us to find any active order instantly in O(1) time without searching through price levels.
     private final Map<String, Order> ordersById = new HashMap<>();
+
+    // TRADE HISTORY: Audit trail of all completed trades executed by this system.
     private final List<Trade> trades = new ArrayList<>();
 
-    // 3. Main Action: Add an Order
+
+    // =========================================================================
+    // STAGE 3: MAIN ACTION - ADDING AN ORDER
+    // Entry point when a trader submits a new order to buy or sell.
+    // =========================================================================
+
     public List<Trade> addOrder(String id, Side side, long price, long quantity) {
+
+        // Safety Check: Reject duplicate IDs or orders with zero/negative quantities
         if (ordersById.containsKey(id) || quantity <= 0) {
             throw new IllegalArgumentException("Invalid order submission");
         }
 
+        // Wrap raw inputs into a new Order object
         Order incoming = new Order(id, side, price, quantity);
 
-        // Step 1: Try to match with opposite orders
+        // STEP A: Try to immediately execute trades against existing resting orders
         List<Trade> newTrades = match(incoming);
+
+        // Save executed trades to global trade list
         trades.addAll(newTrades);
 
-        // Step 2: If quantity is left over, put it on the book to wait
+        // STEP B: If the incoming order wasn't fully filled, place leftover quantity on book
         if (incoming.quantity > 0) {
             restOnBook(incoming);
         }
 
+        // Return trades generated specifically by this new order
         return newTrades;
     }
 
-    // 4. Matching Logic
+
+    // =========================================================================
+    // STAGE 4: MATCHING ENGINE
+    // Core logic that matches incoming orders against existing orders.
+    // =========================================================================
+
     private List<Trade> match(Order incoming) {
         List<Trade> newTrades = new ArrayList<>();
 
-        // Pick the opposite side of the book to trade against
+        // Pick the OPPOSITE book to search for matches.
+        // If incoming is BUY -> Look for sellers in 'asks'
+        // If incoming is SELL -> Look for buyers in 'bids'
         TreeMap<Long, List<Order>> oppositeBook;
         if (incoming.side == Side.BUY) {
             oppositeBook = asks;
@@ -60,14 +99,16 @@ public class OrderBook1 {
             oppositeBook = bids;
         }
 
-        // Loop as long as incoming order needs filling and opposite orders exist
+        // Loop as long as incoming order has remaining quantity AND opposing orders exist
         while (incoming.quantity > 0 && !oppositeBook.isEmpty()) {
 
-            // Get the best price level on the opposite side
+            // Grab the BEST available price level on the opposite side (the top of the TreeMap)
             Map.Entry<Long, List<Order>> bestLevel = oppositeBook.firstEntry();
             long levelPrice = bestLevel.getKey();
 
-            // Check if prices cross
+            // Check if prices "cross" (Can a deal happen?):
+            // - BUY incoming: Wants to buy at 'price' or cheaper -> incoming.price >= levelPrice
+            // - SELL incoming: Wants to sell at 'price' or higher -> incoming.price <= levelPrice
             boolean pricesCross;
             if (incoming.side == Side.BUY) {
                 pricesCross = (incoming.price >= levelPrice);
@@ -75,18 +116,21 @@ public class OrderBook1 {
                 pricesCross = (incoming.price <= levelPrice);
             }
 
+            // If prices do NOT cross, no trade can happen. Stop matching immediately.
             if (!pricesCross) {
-                break; // Prices don't match, stop trying to trade
+                break;
             }
 
-            // Get the oldest resting order at this price (FIFO)
+            // Price match confirmed! Grab the waiting line at this price level.
             List<Order> queue = bestLevel.getValue();
+
+            // Get the OLDEST resting order at the front of the list (Time Priority / FIFO)
             Order resting = queue.get(0);
 
-            // Calculate fill amount
+            // Trade quantity is limited by whichever order has fewer shares/units left
             long fillQuantity = Math.min(incoming.quantity, resting.quantity);
 
-            // Determine buyer and seller IDs
+            // Determine who was buyer and who was seller for the trade log
             String buyId, sellId;
             if (incoming.side == Side.BUY) {
                 buyId = incoming.id;
@@ -96,20 +140,20 @@ public class OrderBook1 {
                 sellId = incoming.id;
             }
 
-            // Record the trade execution
+            // Create and record the trade event at the resting order's price level
             Trade trade = new Trade(buyId, sellId, levelPrice, fillQuantity);
             newTrades.add(trade);
 
-            // Update remaining quantities
+            // Deduct traded amount from both orders' quantities
             incoming.quantity -= fillQuantity;
             resting.quantity -= fillQuantity;
 
-            // Clean up fully filled resting order
+            // CLEANUP: If the resting order is now completely filled (0 quantity left)
             if (resting.quantity == 0) {
-                queue.remove(0); // Remove from list
-                ordersById.remove(resting.id); // Remove from map
+                queue.remove(0);               // Remove resting order from the price level line
+                ordersById.remove(resting.id); // Remove resting order from global fast-lookup map
 
-                // Remove price level entirely if no orders remain at this price
+                // If no more orders remain at this price level, remove the price entry entirely
                 if (queue.isEmpty()) {
                     oppositeBook.remove(levelPrice);
                 }
@@ -119,8 +163,10 @@ public class OrderBook1 {
         return newTrades;
     }
 
-    // 5. Helper: Save leftover order to book
+    // Helper Method: Places leftover/unfilled order onto the board to wait for future trades
     private void restOnBook(Order order) {
+
+        // Select target book based on side
         TreeMap<Long, List<Order>> targetBook;
         if (order.side == Side.BUY) {
             targetBook = bids;
@@ -128,23 +174,33 @@ public class OrderBook1 {
             targetBook = asks;
         }
 
-        // Add price level if it doesn't exist, then add order to the back of list
+        // If this price level doesn't exist yet, create a new list for it
         if (!targetBook.containsKey(order.price)) {
             targetBook.put(order.price, new ArrayList<>());
         }
+
+        // Add order to the BACK of the list (maintains arrival sequence for FIFO)
         targetBook.get(order.price).add(order);
 
-        // Save to fast lookup map
+        // Register order in global HashMap for fast lookup
         ordersById.put(order.id, order);
     }
 
-    // 6. Cancel an Order
+
+    // =========================================================================
+    // STAGE 5: MANAGEMENT & MARKET QUERIES
+    // Fast O(1) order cancellations and top-of-book market data lookups.
+    // =========================================================================
+
+    // Cancels an active order by ID
     public boolean cancelOrder(String id) {
+        // Step 1: Remove from HashMap instantly. If it wasn't in HashMap, it doesn't exist.
         Order order = ordersById.remove(id);
         if (order == null) {
-            return false; // Order wasn't found on the book
+            return false; // Order was already filled or cancelled
         }
 
+        // Step 2: Determine which book it resides in
         TreeMap<Long, List<Order>> targetBook;
         if (order.side == Side.BUY) {
             targetBook = bids;
@@ -152,28 +208,33 @@ public class OrderBook1 {
             targetBook = asks;
         }
 
+        // Step 3: Locate the list at that price level and remove the order from the list
         List<Order> level = targetBook.get(order.price);
         if (level != null) {
             level.remove(order);
+
+            // Clean up price level if no orders are left
             if (level.isEmpty()) {
                 targetBook.remove(order.price);
             }
         }
 
-        return true;
+        return true; // Successfully cancelled
     }
 
-    // 7. Market Queries
+    // Returns the highest active BUY price in the market (or null if empty)
     public Long bestBid() {
         if (bids.isEmpty()) return null;
-        return bids.firstKey();
+        return bids.firstKey(); // O(1) access to top key
     }
 
+    // Returns the lowest active SELL price in the market (or null if empty)
     public Long bestAsk() {
         if (asks.isEmpty()) return null;
-        return asks.firstKey();
+        return asks.firstKey(); // O(1) access to top key
     }
 
+    // Returns all trades completed since system startup
     public List<Trade> getTrades() {
         return trades;
     }
