@@ -5,14 +5,14 @@ public class ExpiringlnventoryStore {
 
 
 
-    private static class Item{
+    private static class Item {
         final String id;
         final long expirationTimesstamp;
         final long weight;
         final long sequence;
         boolean removed = false;
 
-        Item(String id, long expirationTimesstamp, long weight, long sequence){
+        Item(String id, long expirationTimesstamp, long weight, long sequence) {
             this.id = id;
             this.expirationTimesstamp = expirationTimesstamp;
             this.weight = weight;
@@ -21,9 +21,8 @@ public class ExpiringlnventoryStore {
         }
 
 
-
-        private final PriorityQueue<Item> heap = new PriorityQueue<>((Item a, Item b)->{
-            if(a.weight!= b.weight){
+        private final PriorityQueue<Item> heap = new PriorityQueue<>((Item a, Item b) -> {
+            if (a.weight != b.weight) {
                 return Long.compare(b.weight, a.weight);
             }
             return Long.compare(a.sequence, b.sequence);
@@ -33,43 +32,79 @@ public class ExpiringlnventoryStore {
         private final Map<String, Item> liveItems = new HashMap<>();
 
 
-        private long sequenceCounter =0;
+        private long sequenceCounter = 0;
 
 
-        public void store(String itemId, long weight, long expirationTimesstamp){
-            if(liveItems.containsKey(itemId)){
-                throw new IllegalStateException("Item with id "+itemId+" already exists");
+        public void store(String itemId, long weight, long expirationTimesstamp) {
+            if (liveItems.containsKey(itemId)) {
+                throw new IllegalStateException("Item with id " + itemId + " already exists");
             }
 
 
             Item item = new Item(itemId, expirationTimesstamp, weight, sequenceCounter++);
 
-            liveItems.put(itemId,item);
+            liveItems.put(itemId, item);
 
             heap.offer(item);
         }
 
-        public String retrieve(long currentTimestamp){
-        while(!heap.isEmpty()){
-        Item top = heap.peek();
+        public String retrieve(long currentTimestamp) {
+            while (!heap.isEmpty()) {
+                Item top = heap.peek();
 
-        if(top.removed){
-        heap.poll();
-        continue;
-        if(top.expirationTimesstamp <= currentTimestamp){
-        heap.poll();
-        liveItems.remove(top.id);
-        continue;
-        heap.poll();
+                if (top.removed) {
+                    heap.poll();
+                    continue;
+                }
+                if (top.expirationTimesstamp <= currentTimestamp) {
+                    heap.poll();
+                    liveItems.remove(top.id);
+                    continue;
+                }
 
-        liveItems.remove(top.id);
-        return top.id;
+                heap.poll();
+
+                liveItems.remove(top.id);
+                return top.id;
+            }
+
+            return null;
+
         }
 
-        return null;
-        }
-        }
+
+        public boolean remove(String itemId){
+            Item item = liveItems.remove(itemId);
+            if(item == null){
+                return false;
+            }
+
+            item.removed = true;
+
+
+            return true;
         }
     }
 
-}
+
+
+
+
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
