@@ -40,7 +40,16 @@ public class Portfolio {
         if (price < 0) throw new IllegalArgumentException("Price cannot be negative");
 
         // Fetch existing position for symbol. If trading for the first time, initialize a new Position(0, 0.0, 0.0).
-        Position pos = positions.computeIfAbsent(symbol, k -> new Position());
+//        Position pos = positions.computeIfAbsent(symbol, k -> new Position());
+
+        // 1. Try to get the existing position from the map
+        Position pos = positions.get(symbol);
+
+// 2. If it doesn't exist yet, create a new one and put it in the map
+        if (pos == null) {
+            pos = new Position();
+            positions.put(symbol, pos);
+        }
 
         // ---------------------------------------------------------------------
         // CASE A: BUYING SHARES (Increasing position size & shifting cost basis)
